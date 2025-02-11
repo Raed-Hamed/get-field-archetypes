@@ -15,22 +15,22 @@ nc_in = PreProcessNC("era5*.nc")
 nc_in.subset_time("1980-01-01", "2023-12-31")
 ```
 
-## de-season and de-trend data 
-```{python}
-nc_deseason = nc_in.deseasonalize(ds_in=nc_in.ds, groupby="time.dayofyear")
-nc_deseason_detrend = nc_in.detrend_linear(ds_in=nc_in.ds)
-```
-
 ## Create subset
 ```{python}
-nc_subset = nc_in.subset_data(ds_in=nc_deseason, year=2010, region_extent=[-100, -85, 35, 45])
+nc_subset = nc_in.subset_data(ds_in=nc_in.ds,region_extent=[-10, 40, 35, 70])
+```
+
+## de-season and de-trend data 
+```{python}
+nc_deseason = nc_in.deseasonalize(ds_in=nc_subset, groupby="time.dayofyear")
+nc_deseason_detrend = nc_in.detrend_linear(ds_in=nc_deseason)
 ```
 
 ## Plot
 ```{python}
 nc_in.plot_spatial_field(ds_in = nc_deseason_detrend, region_extent = [-10, 40, 35, 70],
 title="2003-EU-JJA",
-year = 2003,
+year = 2018,
 months = [6,7,8],
 aggregate = "mean")
 ```
