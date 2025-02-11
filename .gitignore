@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 # Ignore Poetry virtual environment (if created locally)
 .poetry/
+#Ignore data file
+.data/
