@@ -1,5 +1,23 @@
 ---
-title: "Untitled"
+title: "NC Analysis Report"
+jupyter: python3
 format: html
 ---
+## Import the Module
+```{python}
+import sys; sys.path.insert(0, '..')
+from src.preprocess_nc import PreProcessNC
+```
+```{python}
+# Create an instance
+analysis = PreProcessNC("NOAAGlobalTemp*.nc")
+analysis.subset_time("1980-01-01", "2023-12-31") \
+        .deseasonalize() \
+        .detrend_linear()
+```
+
+```{python}
+# Plot
+analysis.plot_spatial_field(region_extent = [-10, 40, 35, 70],title="Field Map for EU",year = 2003, months = [6,7,8])
+```
 

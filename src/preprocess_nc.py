@@ -1,9 +1,12 @@
 import xarray as xr
+xr.set_options(display_style="text")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import os
+
 
 class PreProcessNC:
     def __init__(self, file_pattern, var_name=None):
@@ -16,6 +19,13 @@ class PreProcessNC:
                                       If not provided and only one variable exists,
                                       that variable will be used.
         """
+        # If the provided file_pattern is not an absolute path, assume it's relative to data/raw.
+        if not os.path.isabs(file_pattern):
+            # Determine the base path. Assuming this module is in src/, the project root is one level up.
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "raw"))
+            file_pattern = os.path.join(base_dir, file_pattern)
+            print("Resolved file pattern:", file_pattern)
+
         self.ds = xr.open_mfdataset(file_pattern, combine='by_coords')
         if var_name is None:
             data_vars = list(self.ds.data_vars.keys())
@@ -46,31 +56,105 @@ class PreProcessNC:
         if isinstance(months, int):
             months = [months]
         ds_season = self.ds.where(self.ds.time.dt.month.isin(months), drop=True)
-        return ds_season
+        return self
 
-    def deseasonalize(self, ds_in, var_name=None, groupby="time.dayofyear"):
+    def deseasonalize(self, ds_in=None, var_name=None, groupby="time.dayofyear"):
         """
         Remove the seasonal cycle by subtracting the climatology.
         """
+        if ds_in is None:
+            ds_in = self.ds
         if var_name is None:
             var_name = self.var_name
         clim = ds_in[var_name].groupby(groupby).mean("time")
         anom = ds_in[var_name].groupby(groupby) - clim
         ds_out = ds_in.copy()
         ds_out[var_name] = anom
-        return ds_out
-
-    def detrend_linear(self, ds_in, var_name=None):
+        self.ds = ds_out  # update the instance attribute
+        return self
+    
+    def detrend_linear(self, ds_in=None, var_name=None):
         """
         Remove the linear trend from the data.
         """
+        if ds_in is None:
+            ds_in = self.ds
         if var_name is None:
             var_name = self.var_name
         poly = ds_in[var_name].polyfit(dim="time", deg=1)
-        trend = xr.polyval(ds_in["time"], poly[var_name + "_polyfit_coefficients"])
+        coeff_key = var_name + "_polyfit_coefficients"
+        if coeff_key not in poly:
+            coeff_key = "polyfit_coefficients"
+        trend = xr.polyval(ds_in["time"], poly[coeff_key])
         ds_out = ds_in.copy()
         ds_out[var_name] = ds_in[var_name] - trend
-        return ds_out
+        self.ds = ds_out  # update the instance attribute
+        return self
+    
+    
+    def plot_spatial_field(self, region_extent=None, var_name=None, title=None, aggregate="mean",
+                       lat_name="lat", lon_name="lon", year=None, months=None, days=None):
+        """
+        Plot a spatial field map, optionally restricted to a specific region and time filters.
+    
+        Args:
+        region_extent (list or tuple, optional): [lon_min, lon_max, lat_min, lat_max] defining the region.
+            If None, the full dataset is used.
+        var_name (str, optional): Variable to plot. Defaults to the instance variable.
+        title (str, optional): Title for the plot.
+        aggregate (str, optional): How to aggregate over time ('mean', 'sum', or 'none').
+        lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
+        lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
+        year (int, optional): A specific year to filter on.
+        months (int or list, optional): Month(s) to filter on.
+        days (int or list, optional): Day(s) to filter on.
+        """
+        if var_name is None:
+            var_name = self.var_name
+
+        # Apply time filtering using subset_data (without modifying the processed data)
+        ds_time_filtered = self.subset_data(year=year, months=months, days=days)
+    
+        # Optionally remap longitudes if they are in 0-360:
+        ds_to_plot = ds_time_filtered
+        if ds_to_plot[lon_name].max() > 180:
+            ds_to_plot = ds_to_plot.assign_coords(lon=(((ds_to_plot[lon_name] + 180) % 360) - 180)).sortby(lon_name)
+    
+        # If a spatial region is provided, subset the dataset accordingly:
+        if region_extent is not None:
+            ds_to_plot = ds_to_plot.where(
+                (ds_to_plot[lon_name] >= region_extent[0]) & (ds_to_plot[lon_name] <= region_extent[1]) &
+                (ds_to_plot[lat_name] >= region_extent[2]) & (ds_to_plot[lat_name] <= region_extent[3]),
+                drop=True
+            )
+    
+        # Aggregate over time if requested:
+        if aggregate == "mean":
+            field = ds_to_plot[var_name].mean(dim="time")
+        elif aggregate == "sum":
+            field = ds_to_plot[var_name].sum(dim="time")
+        elif aggregate == "none":
+            field = ds_to_plot[var_name]
+        else:
+            raise ValueError("Aggregate must be 'mean', 'sum', or 'none'.")
+
+        fig, ax = plt.subplots(figsize=(8, 5), subplot_kw=dict(projection=ccrs.PlateCarree()))
+        field.plot(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap="RdBu_r",
+            robust=True,
+            cbar_kwargs={'label': title or f"{var_name} ({aggregate})"}
+        )
+        ax.coastlines()
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, facecolor="lightgray")
+    
+        if region_extent is not None:
+            ax.set_extent(region_extent, crs=ccrs.PlateCarree())
+    
+        plt.title(title or f"Spatial Field Map: {var_name}")
+        plt.show()
 
     def subset_data(self, year=None, year_range=None, months=None, days=None):
         """
@@ -110,18 +194,43 @@ class PreProcessNC:
             ds_subset = ds_subset.where(ds_subset.time.dt.day.isin(days), drop=True)
         return ds_subset
 
-    def plot_field(self, var_name=None, extent=None, title=None, 
-                   year=None, year_range=None, months=None, days=None, aggregate="mean"):
+    def plot_spatial_field(self, region_extent=None, var_name=None, title=None, aggregate="mean",
+                       lat_name="lat", lon_name="lon", year=None, months=None, days=None):
         """
-        Plot a field based on various time filters.
+        Plot a spatial field map, optionally restricted to a specific region and time filters.
+    
+        Args:
+        region_extent (list or tuple, optional): [lon_min, lon_max, lat_min, lat_max] defining the region.
+            If None, the full dataset is used.
+        var_name (str, optional): Variable to plot. Defaults to the instance variable.
+        title (str, optional): Title for the plot.
+        aggregate (str, optional): How to aggregate over time ('mean', 'sum', or 'none').
+        lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
+        lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
+        year (int, optional): A specific year to filter on.
+        months (int or list, optional): Month(s) to filter on.
+        days (int or list, optional): Day(s) to filter on.
         """
         if var_name is None:
             var_name = self.var_name
-        
-        ds_to_plot = self.subset_data(year=year, year_range=year_range, months=months, days=days)
-        if ds_to_plot.time.size == 0:
-            raise ValueError("No data found for the given filters.")
-        
+
+        # Apply time filtering using subset_data (without modifying the processed data)
+        ds_time_filtered = self.subset_data(year=year, months=months, days=days)
+    
+        # Optionally remap longitudes if they are in 0-360:
+        ds_to_plot = ds_time_filtered
+        if ds_to_plot[lon_name].max() > 180:
+            ds_to_plot = ds_to_plot.assign_coords(lon=(((ds_to_plot[lon_name] + 180) % 360) - 180)).sortby(lon_name)
+    
+        # If a spatial region is provided, subset the dataset accordingly:
+        if region_extent is not None:
+            ds_to_plot = ds_to_plot.where(
+                (ds_to_plot[lon_name] >= region_extent[0]) & (ds_to_plot[lon_name] <= region_extent[1]) &
+                (ds_to_plot[lat_name] >= region_extent[2]) & (ds_to_plot[lat_name] <= region_extent[3]),
+                drop=True
+            )
+    
+        # Aggregate over time if requested:
         if aggregate == "mean":
             field = ds_to_plot[var_name].mean(dim="time")
         elif aggregate == "sum":
@@ -130,36 +239,23 @@ class PreProcessNC:
             field = ds_to_plot[var_name]
         else:
             raise ValueError("Aggregate must be 'mean', 'sum', or 'none'.")
-        
-        filters = []
-        if year is not None:
-            filters.append(f"{year}")
-        if year_range is not None:
-            filters.append(f"{year_range[0]}-{year_range[1]}")
-        if months is not None:
-            filters.append(f"months={months}")
-        if days is not None:
-            filters.append(f"days={days}")
-        default_title = f"{' '.join(filters)} - {var_name} ({aggregate})" if aggregate != "none" else f"{' '.join(filters)} - {var_name} (all time steps)"
-        plot_title = title or default_title
-        
-        fig, ax = plt.subplots(figsize=(8, 5),
-                               subplot_kw=dict(projection=ccrs.PlateCarree()))
+
+        fig, ax = plt.subplots(figsize=(8, 5), subplot_kw=dict(projection=ccrs.PlateCarree()))
         field.plot(
             ax=ax,
             transform=ccrs.PlateCarree(),
             cmap="RdBu_r",
             robust=True,
-            cbar_kwargs={'label': plot_title}
+            cbar_kwargs={'label': title or f"{var_name} ({aggregate})"}
         )
         ax.coastlines()
         ax.add_feature(cfeature.BORDERS, linewidth=0.5)
         ax.add_feature(cfeature.LAND, facecolor="lightgray")
-        if extent:
-            ax.set_extent(extent, crs=ccrs.PlateCarree())
-        else:
-            ax.set_global()
-        plt.title(plot_title)
+    
+        if region_extent is not None:
+            ax.set_extent(region_extent, crs=ccrs.PlateCarree())
+    
+        plt.title(title or f"Spatial Field Map: {var_name}")
         plt.show()
 
     def compute_weighted_time_series(self, region_extent, groupby="time.dayofyear", lat_name="lat", lon_name="lon"):
