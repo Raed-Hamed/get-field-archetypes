@@ -27,6 +27,20 @@ class PreProcessNC:
             print("Resolved file pattern:", file_pattern)
 
         self.ds = xr.open_mfdataset(file_pattern, combine='by_coords')
+        
+        # Rename coordinates if they exist
+        rename_dict = {}
+        if "valid_time" in self.ds.coords:
+            rename_dict["valid_time"] = "time"
+        if "latitude" in self.ds.coords:
+            rename_dict["latitude"] = "lat"
+        if "longitude" in self.ds.coords:
+            rename_dict["longitude"] = "lon"
+
+        if rename_dict:
+            self.ds = self.ds.rename(rename_dict)
+            print(f"Renamed coordinates: {rename_dict}")
+  
         if var_name is None:
             data_vars = list(self.ds.data_vars.keys())
             if len(data_vars) == 1:
@@ -286,7 +300,6 @@ class PreProcessNC:
 
         return {"raw": raw_ts, "deseasonalized": deseason_ts, "detrended": detrend_ts}
 
-
     def plot_weighted_time_series(self, region_extent, groupby="time.dayofyear", 
                                 lat_name="lat", lon_name="lon", 
                                 year=None, months=None, days=None, ds_in=None):
@@ -294,7 +307,7 @@ class PreProcessNC:
         Plot the weighted spatially averaged time series over a specific region,
         with optional time filtering.
         
-        This plots the raw, deseasonalized, and detrended time series on one figure.
+        This plots the raw, deseasonalized, and detrended time series in separate panels.
         
         Args:
             region_extent (list or tuple): [lon_min, lon_max, lat_min, lat_max] defining the region.
@@ -309,12 +322,30 @@ class PreProcessNC:
         ts_dict = self.compute_weighted_time_series(region_extent, groupby, lat_name, lon_name,
                                                     year=year, months=months, days=days, ds_in=ds_in)
         
-        plt.figure(figsize=(12, 6))
-        ts_dict["raw"].plot(label="Raw", color="blue")
-        ts_dict["deseasonalized"].plot(label="Deseasonalized", color="orange")
-        ts_dict["detrended"].plot(label="Detrended", color="green")
-        plt.legend()
-        plt.xlabel("Time")
-        plt.ylabel(self.var_name)
-        plt.title(f"Weighted Spatial Average Time Series\nRegion: {region_extent}")
+        fig, axes = plt.subplots(nrows=4, figsize=(12, 16), sharex=True)
+
+        # Plot each time series in a separate panel
+        ts_dict["raw"].plot(ax=axes[0], color="blue")
+        axes[0].set_title("Raw Time Series")
+        axes[0].set_ylabel(self.var_name)
+
+        ts_dict["deseasonalized"].plot(ax=axes[1], color="orange")
+        axes[1].set_title("Deseasonalized Time Series")
+        axes[1].set_ylabel(self.var_name)
+
+        ts_dict["detrended"].plot(ax=axes[2], color="green")
+        axes[2].set_title("Detrended Time Series")
+        axes[2].set_ylabel(self.var_name)
+            
+        # Compute and plot the trend (Raw - Detrended)
+        trend = ts_dict["deseasonalized"] - ts_dict["detrended"]
+        trend.plot(ax=axes[3], color="red")
+        axes[3].set_title("Trend")
+        axes[3].set_ylabel(self.var_name)
+
+        # Common x-axis label
+        axes[3].set_xlabel("Time")
+
+        plt.suptitle(f"Weighted Spatial Average Time Series\nRegion: {region_extent}")
+        plt.tight_layout(rect=[0, 0, 1, 0.97])  # Adjust layout to fit suptitle
         plt.show()

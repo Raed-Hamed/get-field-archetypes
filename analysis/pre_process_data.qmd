@@ -11,7 +11,7 @@ from src.preprocess_nc import PreProcessNC
 
 ## Create an instance in time
 ```{python}
-nc_in = PreProcessNC("NOAAGlobalTemp*.nc")
+nc_in = PreProcessNC("era5*.nc")
 nc_in.subset_time("1980-01-01", "2023-12-31")
 ```
 
@@ -31,7 +31,8 @@ nc_subset = nc_in.subset_data(ds_in=nc_deseason, year=2010, region_extent=[-100,
 nc_in.plot_spatial_field(ds_in = nc_deseason_detrend, region_extent = [-10, 40, 35, 70],
 title="2003-EU-JJA",
 year = 2003,
-months = [6,7,8])
+months = [6,7,8],
+aggregate = "mean")
 ```
 
 ```{python}
