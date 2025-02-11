@@ -1,0 +1,449 @@
+---
+title: "NOAA Global Surface Temperature: MAM/JJA Detrending in Python"
+author: "Raed Hamed"
+format: html
+jupyter: python3
+---
+
+```{python}
+
+import xarray as xr
+import numpy as np
+import pandas as pd
+
+# Example: change this to match your local NOAA v6 file path/pattern
+ds = xr.open_mfdataset(
+    "NOAAGlobalTemp_v6.0.0_gridded_s185001_e202412_c20250106T150253.nc", 
+    combine='by_coords'
+)
+
+ds
+```
+
+```{python}
+# 1) Subset data from 1980 to 2025
+ds = ds.sel(time=slice("1980-01-01", "2025-12-31"))
+
+# 2) Extract seasons:
+# MAM: Mar, Apr, May; JJA: Jun, Jul, Aug
+ds_mam = ds.where(ds.time.dt.month.isin([3,4,5]), drop=True)
+ds_jja = ds.where(ds.time.dt.month.isin([6,7,8]), drop=True)
+# Combined MAM+JJA
+ds_mamjja = ds.where(ds.time.dt.month.isin([3,4,5,6,7,8]), drop=True)
+
+ds
+```
+
+```{python}
+
+# We'll assume the variable name is 'temp' (adjust to your data)
+#-----------------------------------------------
+# Helper function to deseasonalize
+def deseasonalize(ds_in, var_name="temp"):
+    """
+    Subtracts mean seasonal cycle (grouped by dayofyear or month).
+    Adjust time grouping depending on data frequency (daily, monthly, etc.).
+    """
+    # Example for daily data: group by day of year
+    clim = ds_in[var_name].groupby("time.dayofyear").mean("time")
+    anom = ds_in[var_name].groupby("time.dayofyear") - clim
+    # Return a dataset with the anomaly plus original coords
+    ds_out = ds_in.copy()
+    ds_out[var_name] = anom
+    return ds_out
+
+#-----------------------------------------------
+# Helper function to detrend (linear) along 'time'
+def detrend_linear(ds_in, var_name="anom"):
+    """
+    Performs a simple linear detrend for 'var_name' using xarray.polyfit.
+    """
+    # Fit polynomial of degree=1
+    poly = ds_in[var_name].polyfit(dim='time', deg=1)
+    # Evaluate the trend at each time
+    trend = xr.polyval(ds_in['time'], poly[var_name + "_polyfit_coefficients"])
+    # Subtract the linear trend
+    detrended = ds_in[var_name] - trend
+    ds_out = ds_in.copy()
+    ds_out[var_name] = detrended
+    return ds_out
+
+```
+```{python}
+
+print(ds.data_vars)     # lists the data variables in the dataset
+```
+
+```{python}
+
+# 3) Deseasonalize each season separately
+ds_mam_anom   = deseasonalize(ds_mam, var_name="anom")
+ds_jja_anom   = deseasonalize(ds_jja, var_name="anom")
+ds_mamjja_anom = deseasonalize(ds_mamjja, var_name="anom")
+
+ds_mamjja_anom
+```
+```{python}
+
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.pyplot as plt
+# 1) Subset to northern midlatitudes, e.g. 30°N–60°N
+ds_midlat = ds_jja_anom.sel(lat=slice(-20, 60))
+
+# 2) Compute the time mean for that subdomain
+mean_field_midlat = ds_midlat['anom'].mean(dim='time')
+
+# 3) Create a figure & cartopy axis
+fig, ax = plt.subplots(figsize=(8, 5),
+                       subplot_kw=dict(projection=ccrs.PlateCarree()))
+
+# 4) Plot the mean anomaly
+mean_field_midlat.plot(
+    ax=ax,
+    transform=ccrs.PlateCarree(), 
+    cmap='RdBu_r',
+    robust=True,  
+    cbar_kwargs={'label': 'Mean Anomaly (30N–60N)'})
+
+# 5) Add geographic features
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+
+# 6) Zoom in on the lat range
+#    left_lon, right_lon, bottom_lat, top_lat
+ax.set_extent([-180, 180, -20, 60], crs=ccrs.PlateCarree())
+
+plt.title('MAM+JJA Mean Anomaly (Northern Midlatitudes)')
+plt.show()
+```
+
+
+```{python}
+
+def detrend_linear(ds_in, var_name="anom"):
+    """
+    Perform a simple linear detrend on 'ds_in[var_name]' using xarray.polyfit.
+    """
+    # 1) Fit a 1st-degree polynomial along 'time'
+    poly_ds = ds_in[var_name].polyfit(dim='time', deg=1)
+    
+    # 2) Find the actual name of the polyfit-coefficients variable
+    candidates = [v for v in poly_ds.data_vars if "polyfit_coefficients" in v]
+    if not candidates:
+        raise KeyError("No 'polyfit_coefficients' variable found in polyfit result.")
+    coefs_var = candidates[0]  # e.g. could be "polyfit_coefficients" or "anom_polyfit_coefficients"
+
+    # 3) Evaluate the trend
+    trend = xr.polyval(ds_in["time"], poly_ds[coefs_var])
+    
+    # 4) Subtract the trend
+    ds_out = ds_in.copy()
+    ds_out[var_name] = ds_in[var_name] - trend
+    return ds_out
+
+```
+
+```{python}
+
+# 4) Detrend each season separately
+ds_mam_detrended   = detrend_linear(ds_mam_anom,   var_name="anom")
+ds_jja_detrended   = detrend_linear(ds_jja_anom,   var_name="anom")
+ds_mamjja_detrended = detrend_linear(ds_mamjja_anom, var_name="anom")
+
+ds_jja_detrended
+
+```
+
+```{python}
+
+
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.pyplot as plt
+
+# 1) Compute the time mean of your detrended data
+mean_field_detrended = ds_jja_detrended['anom'].mean(dim='time')
+
+# 2) Create a figure and an axis with a PlateCarree map projection
+fig, ax = plt.subplots(figsize=(10, 5),
+                       subplot_kw=dict(projection=ccrs.PlateCarree()))
+
+# 3) Plot the mean detrended anomaly field
+mean_field_detrended.plot(
+    ax=ax,
+    transform=ccrs.PlateCarree(), 
+    cmap='RdBu_r',            # or any preferred colormap
+    robust=True,              # automatically clip extreme outliers
+    cbar_kwargs={'label': 'Detrended Mean Anomaly'}
+)
+
+# 4) Add coastlines, borders, land color, etc.
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+
+# 5) Optionally zoom out to see the entire globe
+ax.set_global()
+
+plt.title('Detrended Mean Anomaly (MAM+JJA)')
+plt.show()
+
+```
+
+```{python}
+
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.pyplot as plt
+
+# 1) Subset the dataset for year 2010
+ds_2010 = ds_jja_detrended.sel(time=slice("2003-01-01", "2003-12-31"))
+
+# 2) Compute the mean anomaly for the entire year 2010
+mean_2010 = ds_2010['anom'].mean(dim='time')
+
+# 3) Create a figure + cartopy axis with PlateCarree projection
+fig, ax = plt.subplots(figsize=(10, 5),
+                       subplot_kw=dict(projection=ccrs.PlateCarree()))
+
+# 4) Plot the mean anomaly for 2010
+mean_2010.plot(
+    ax=ax,
+    transform=ccrs.PlateCarree(),
+    cmap='RdBu_r',
+    robust=True,
+    cbar_kwargs={'label': 'Detrended Mean Anomaly (2010)'}
+)
+
+# 5) Add geographic features
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+
+# 6) Set global extent
+ax.set_global()
+
+plt.title("2010 Mean Anomaly (Detrended)")
+plt.show()
+
+```
+
+```{python}
+print(ds.lon)
+print(ds.lon.min().values, ds.lon.max().values)
+
+```
+
+```{python}
+# -----------------------------
+# 1) Subset dataset to JJA only
+# -----------------------------
+ds_jja = ds.where(ds.time.dt.month.isin([6, 7, 8]), drop=True)
+
+# Example bounding box for the U.S. Midwest (approx. lat 35N–45N, lon -100–-85)
+# Adjust as needed
+
+ds_mapped = ds_jja.assign_coords(lon=(((ds.lon + 180) % 360) - 180)).sortby("lon")
+ds_jja_midwest = ds_mapped.sel(lat=slice(35,70), lon=slice(-10,40))
+
+print(ds_jja_midwest)
+# -----------------------------
+# 2) Compute the spatial mean
+# -----------------------------
+# We'll assume your variable is named "anom"
+ts_raw = ds_jja_midwest["anom"].mean(dim=["lat", "lon"])
+# ts_raw is now a 1D DataArray indexed by time, capturing only JJA data in the Midwest region
+
+# -----------------------------
+# 3) Fit a linear trend to the time series
+# -----------------------------
+poly_ds = ts_raw.polyfit(dim='time', deg=1)
+# polyfit creates something like: "anom_polyfit_coefficients"
+
+# Evaluate the fitted trend
+coeff_name = [v for v in poly_ds.data_vars if "polyfit_coefficients" in v][0]
+trend = xr.polyval(ts_raw["time"], poly_ds[coeff_name])
+
+# Residual = raw - trend
+residual = ts_raw - trend
+
+# -----------------------------
+# 4) Plot all three series (Raw, Trend, Residual)
+# -----------------------------
+plt.figure(figsize=(10, 6))
+
+ts_raw.plot(label="Raw (JJA)", color="blue")
+trend.plot(label="Trend", color="red")
+residual.plot(label="Residual", color="green")
+
+plt.legend()
+plt.title("Midwest Spatial Avg (JJA) - Raw, Trend, and Residual")
+plt.xlabel("Time")
+plt.ylabel("Anomaly (?)")  # Update units as appropriate
+
+plt.show()
+
+```
+
+```{python}
+
+K = 50
+
+from scipy.sparse.linalg import svds
+
+# Suppose ds is an xarray.Dataset with variables "temp", "anom", etc.
+# You want to do a PCA or SVD on the "anom" variable.
+
+# Step 1: pick the DataArray
+da = ds_jja_detrended["anom"]  # xarray.DataArray
+
+ds_subset = da.sel(lat=slice(-20, 65))
+
+# Step 2: flatten or transform to the shape you need (e.g. time x space)
+da_stacked = ds_subset.stack(space=["lat","lon"])  # or whatever dims
+# Step 3: convert to numpy
+X = da_stacked.values
+# X is now a 2D numpy array you can feed to scikit-learn or np.linalg.svd
+
+U, S, Vt = np.linalg.svd(X, full_matrices=False)
+U_k = U[:, :K] * S[:K]
+S_k = S[:K]             # K
+Vt_k = Vt[:K, :]        # K x M
+Vt_k
+
+U_k = U_k.squeeze()  # Removes extra dimensions if they exist
+
+# Convert U_k (time x K modes) to a DataFrame
+df_Uk = pd.DataFrame(U_k)
+
+# Extract time index from xarray dataset
+time_index = ds_subset["time"].values  # Convert to NumPy array
+
+# Convert to DataFrame (Time + Reduced Data)
+df_Uk = pd.DataFrame(U_k)
+df_Uk.insert(0, "Time", time_index)  # Add Time as the first column
+
+# Save to CSV (Time + Reduced Data)
+df_Uk.to_csv("X_reduced.csv", index=False)
+```
+
+```{r}
+# Load the dataset (time is already included)
+X_reduced <- read.csv("X_reduced.csv", header=TRUE)
+
+# Convert Time to Date format (adjust if necessary)
+X_reduced$Time <- as.Date(X_reduced$Time)
+
+# Check structure
+str(X_reduced)
+
+library(archetypes)
+
+# Convert to matrix for AA
+X_matrix <- as.matrix(X_reduced[, -1])  # Remove "Time" column
+
+X_matrix
+# Run stepwise Archetypal Analysis
+aa_models <- stepArchetypes(X_matrix, k=1:10, nrep=5)
+
+# Scree plot to pick the best K
+screeplot(aa_models)
+
+
+```
+```{python}
+
+import cartopy.crs as ccrs
+
+# Suppose Vt_k is the first row of Vt -> that is the first principal component’s spatial pattern
+mode1_flat = Vt[0, :]  # shape = (space,)
+
+nlat = ds_subset.sizes["lat"]
+nlon = ds_subset.sizes["lon"]
+
+mode1_map = mode1_flat.reshape(nlat, nlon)
+
+# Plot
+fig, ax = plt.subplots(subplot_kw=dict(projection=ccrs.PlateCarree()))
+pcm = ax.pcolormesh(ds_subset["lon"], ds_subset["lat"], mode1_map, cmap="RdBu_r")
+fig.colorbar(pcm, ax=ax, label="PC1 Loading")
+ax.coastlines()
+plt.title("First Spatial Mode (PC1)")
+plt.show()
+```
+
+```{python}
+#| label: import-libs
+#| echo: true
+
+import xarray as xr
+import numpy as np
+import pandas as pd
+
+# Example: change this to match your local NOAA v6 file path/pattern
+ds = xr.open_mfdataset(
+    "NOAAGlobalTemp_v6.0.0_gridded_s185001_e202412_c20250106T150253.nc", 
+    combine='by_coords'
+)
+
+# 1) Subset data from 1980 to 2025
+ds = ds.sel(time=slice("1980-01-01", "2025-12-31"))
+
+# 2) Extract seasons:
+# MAM: Mar, Apr, May; JJA: Jun, Jul, Aug
+ds_mam = ds.where(ds.time.dt.month.isin([3,4,5]), drop=True)
+ds_jja = ds.where(ds.time.dt.month.isin([6,7,8]), drop=True)
+# Combined MAM+JJA
+ds_mamjja = ds.where(ds.time.dt.month.isin([3,4,5,6,7,8]), drop=True)
+
+# We'll assume the variable name is 'temp' (adjust to your data)
+#-----------------------------------------------
+# Helper function to deseasonalize
+def deseasonalize(ds_in, var_name="temp"):
+    """
+    Subtracts mean seasonal cycle (grouped by dayofyear or month).
+    Adjust time grouping depending on data frequency (daily, monthly, etc.).
+    """
+    # Example for daily data: group by day of year
+    clim = ds_in[var_name].groupby("time.dayofyear").mean("time")
+    anom = ds_in[var_name].groupby("time.dayofyear") - clim
+    # Return a dataset with the anomaly plus original coords
+    ds_out = ds_in.copy()
+    ds_out[var_name] = anom
+    return ds_out
+
+#-----------------------------------------------
+# Helper function to detrend (linear) along 'time'
+def detrend_linear(ds_in, var_name="temp"):
+    """
+    Performs a simple linear detrend for 'var_name' using xarray.polyfit.
+    """
+    # Fit polynomial of degree=1
+    poly = ds_in[var_name].polyfit(dim='time', deg=1)
+    # Evaluate the trend at each time
+    trend = xr.polyval(ds_in['time'], poly[var_name + "_polyfit_coefficients"])
+    # Subtract the linear trend
+    detrended = ds_in[var_name] - trend
+    ds_out = ds_in.copy()
+    ds_out[var_name] = detrended
+    return ds_out
+
+# 3) Deseasonalize each season separately
+ds_mam_anom   = deseasonalize(ds_mam, var_name="temp")
+ds_jja_anom   = deseasonalize(ds_jja, var_name="temp")
+ds_mamjja_anom = deseasonalize(ds_mamjja, var_name="temp")
+
+# 4) Detrend each season separately
+ds_mam_detrended   = detrend_linear(ds_mam_anom,   var_name="temp")
+ds_jja_detrended   = detrend_linear(ds_jja_anom,   var_name="temp")
+ds_mamjja_detrended = detrend_linear(ds_mamjja_anom, var_name="temp")
+
+# At this point, ds_mam_detrended, ds_jja_detrended, and ds_mamjja_detrended
+# contain separately deseasonalized + detrended data for MAM, JJA, and combined MAM+JJA.
+
+print("Done. Shapes of final data sets:")
+print("MAM:", ds_mam_detrended.temp.shape)
+print("JJA:", ds_jja_detrended.temp.shape)
+print("MAM+JJA:", ds_mamjja_detrended.temp.shape)

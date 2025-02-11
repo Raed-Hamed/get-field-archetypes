@@ -1,0 +1,20 @@
+[project]
+name = "get-field-archetypes"
+version = "0.1.0"
+description = ""
+authors = [
+  { name = "Raed Hamed", email = "raed.hamed@vu.nl" }
+]
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "numpy>=1.26.0,<1.27.0; python_version >= '3.11' and python_version < '3.13'",
+  "xarray (>=2025.1.2,<2026.0.0)",
+  "pandas (>=2.2.3,<3.0.0)",
+  "matplotlib (>=3.10.0,<4.0.0)",
+  "cartopy (>=0.24.1,<0.25.0)"
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
