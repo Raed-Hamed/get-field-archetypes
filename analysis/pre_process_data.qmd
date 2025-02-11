@@ -8,16 +8,32 @@ format: html
 import sys; sys.path.insert(0, '..')
 from src.preprocess_nc import PreProcessNC
 ```
+
+## Create an instance
 ```{python}
-# Create an instance
 analysis = PreProcessNC("NOAAGlobalTemp*.nc")
 analysis.subset_time("1980-01-01", "2023-12-31") \
         .deseasonalize() \
         .detrend_linear()
 ```
 
+## Create subset
 ```{python}
-# Plot
-analysis.plot_spatial_field(region_extent = [-10, 40, 35, 70],title="Field Map for EU",year = 2003, months = [6,7,8])
+ds_filtered = analysis.subset_data(year=2010, region_extent=[-100, -85, 35, 45])
+ds_filtered.plot_spatial_field
 ```
+
+## Plot
+```{python}
+analysis.plot_spatial_field(region_extent = [-10, 40, 35, 70],
+title="2003-EU-JJA",
+year = 2003,
+months = [6,7,8])
+```
+
+```{python}
+# Plot the weighted time series for the full time period:
+analysis.plot_weighted_time_series(region_extent=[-100, -85, 35, 45])
+```
+
 
