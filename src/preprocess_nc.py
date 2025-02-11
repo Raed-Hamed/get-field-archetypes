@@ -59,26 +59,29 @@ class PreProcessNC:
         return self
 
     def deseasonalize(self, ds_in=None, var_name=None, groupby="time.dayofyear"):
-        """
-        Remove the seasonal cycle by subtracting the climatology.
-        """
         if ds_in is None:
             ds_in = self.ds
+            update_self = True
+        else:
+            update_self = False
         if var_name is None:
             var_name = self.var_name
         clim = ds_in[var_name].groupby(groupby).mean("time")
         anom = ds_in[var_name].groupby(groupby) - clim
         ds_out = ds_in.copy()
         ds_out[var_name] = anom
-        self.ds = ds_out  # update the instance attribute
-        return self
+        if update_self:
+            self.ds = ds_out
+            return self
+        else:
+            return ds_out
     
     def detrend_linear(self, ds_in=None, var_name=None):
-        """
-        Remove the linear trend from the data.
-        """
         if ds_in is None:
             ds_in = self.ds
+            update_self = True
+        else:
+            update_self = False
         if var_name is None:
             var_name = self.var_name
         poly = ds_in[var_name].polyfit(dim="time", deg=1)
@@ -88,17 +91,20 @@ class PreProcessNC:
         trend = xr.polyval(ds_in["time"], poly[coeff_key])
         ds_out = ds_in.copy()
         ds_out[var_name] = ds_in[var_name] - trend
-        self.ds = ds_out  # update the instance attribute
-        return self
-    
+        if update_self:
+            self.ds = ds_out
+            return self
+        else:
+            return ds_out
 
-    def subset_data(self, year=None, year_range=None, months=None, days=None, 
-                region_extent=None, lat_name="lat", lon_name="lon"):
+    def subset_data(self, ds_in=None, year=None, year_range=None, months=None, days=None, 
+                    region_extent=None, lat_name="lat", lon_name="lon"):
         """
         Subset the dataset based on time and optionally spatial criteria,
         and adjust the longitude coordinates (projection) if needed.
         
         Args:
+            ds_in (xarray.Dataset, optional): The dataset to filter. If None, self.ds is used.
             year (int, optional): A single year to filter on.
             year_range (tuple, optional): A tuple (start_year, end_year) to filter on.
             months (int or list of ints, optional): Month(s) to filter on.
@@ -106,11 +112,14 @@ class PreProcessNC:
             region_extent (list or tuple, optional): [lon_min, lon_max, lat_min, lat_max] defining the spatial region.
             lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
             lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
-        
+            
         Returns:
-            xarray.Dataset: The filtered dataset.
+            xarray.Dataset: A new dataset filtered according to the criteria.
         """
-        ds_subset = self.ds
+        # Use ds_in if provided, otherwise use self.ds
+        if ds_in is None:
+            ds_in = self.ds
+        ds_subset = ds_in.copy()
 
         # Filter by year or year range (but not both)
         if year is not None and year_range is not None:
@@ -136,7 +145,9 @@ class PreProcessNC:
         
         # Adjust longitude projection if needed (i.e., if lon values are > 180)
         if ds_subset[lon_name].max() > 180:
-            ds_subset = ds_subset.assign_coords(lon=(((ds_subset[lon_name] + 180) % 360) - 180)).sortby(lon_name)
+            ds_subset = ds_subset.assign_coords(
+                lon=(((ds_subset[lon_name] + 180) % 360) - 180)
+            ).sortby(lon_name)
         
         # Apply spatial filtering if region_extent is provided
         if region_extent is not None:
@@ -149,43 +160,50 @@ class PreProcessNC:
         
         return ds_subset
 
-
     def plot_spatial_field(self, region_extent=None, var_name=None, title=None, aggregate="mean",
-                       lat_name="lat", lon_name="lon", year=None, months=None, days=None):
+                        lat_name="lat", lon_name="lon", year=None, months=None, days=None, ds_in=None):
         """
         Plot a spatial field map, optionally restricted to a specific region and time filters.
-    
+        
         Args:
-        region_extent (list or tuple, optional): [lon_min, lon_max, lat_min, lat_max] defining the region.
-            If None, the full dataset is used.
-        var_name (str, optional): Variable to plot. Defaults to the instance variable.
-        title (str, optional): Title for the plot.
-        aggregate (str, optional): How to aggregate over time ('mean', 'sum', or 'none').
-        lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
-        lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
-        year (int, optional): A specific year to filter on.
-        months (int or list, optional): Month(s) to filter on.
-        days (int or list, optional): Day(s) to filter on.
+            region_extent (list or tuple, optional): [lon_min, lon_max, lat_min, lat_max] defining the region.
+                If None, the full dataset is used.
+            var_name (str, optional): Variable to plot. Defaults to the instance variable.
+            title (str, optional): Title for the plot.
+            aggregate (str, optional): How to aggregate over time ('mean', 'sum', or 'none').
+            lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
+            lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
+            year (int, optional): A specific year to filter on.
+            months (int or list of ints, optional): Month(s) to filter on.
+            days (int or list of ints, optional): Day(s) of the month to filter on.
+            ds_in (xarray.Dataset, optional): A dataset to use for plotting instead of self.ds.
+        
+        Returns:
+            None. Displays the plot.
         """
         if var_name is None:
             var_name = self.var_name
 
-        # Apply time filtering using subset_data (without modifying the processed data)
-        ds_time_filtered = self.subset_data(year=year, months=months, days=days)
-    
+        # Use ds_in if provided; otherwise, use self.ds (non-destructively) via subset_data.
+        ds_time_filtered = self.subset_data(ds_in=ds_in, year=year, months=months, days=days)
+
         # Optionally remap longitudes if they are in 0-360:
         ds_to_plot = ds_time_filtered
         if ds_to_plot[lon_name].max() > 180:
-            ds_to_plot = ds_to_plot.assign_coords(lon=(((ds_to_plot[lon_name] + 180) % 360) - 180)).sortby(lon_name)
-    
+            ds_to_plot = ds_to_plot.assign_coords(
+                lon=(((ds_to_plot[lon_name] + 180) % 360) - 180)
+            ).sortby(lon_name)
+
         # If a spatial region is provided, subset the dataset accordingly:
         if region_extent is not None:
             ds_to_plot = ds_to_plot.where(
-                (ds_to_plot[lon_name] >= region_extent[0]) & (ds_to_plot[lon_name] <= region_extent[1]) &
-                (ds_to_plot[lat_name] >= region_extent[2]) & (ds_to_plot[lat_name] <= region_extent[3]),
+                (ds_to_plot[lon_name] >= region_extent[0]) &
+                (ds_to_plot[lon_name] <= region_extent[1]) &
+                (ds_to_plot[lat_name] >= region_extent[2]) &
+                (ds_to_plot[lat_name] <= region_extent[3]),
                 drop=True
             )
-    
+
         # Aggregate over time if requested:
         if aggregate == "mean":
             field = ds_to_plot[var_name].mean(dim="time")
@@ -196,7 +214,9 @@ class PreProcessNC:
         else:
             raise ValueError("Aggregate must be 'mean', 'sum', or 'none'.")
 
-        fig, ax = plt.subplots(figsize=(8, 5), subplot_kw=dict(projection=ccrs.PlateCarree()))
+        fig, ax = plt.subplots(
+            figsize=(8, 5), subplot_kw=dict(projection=ccrs.PlateCarree())
+        )
         field.plot(
             ax=ax,
             transform=ccrs.PlateCarree(),
@@ -207,65 +227,72 @@ class PreProcessNC:
         ax.coastlines()
         ax.add_feature(cfeature.BORDERS, linewidth=0.5)
         ax.add_feature(cfeature.LAND, facecolor="lightgray")
-    
+
+        # Only set the extent if a region_extent is provided
         if region_extent is not None:
             ax.set_extent(region_extent, crs=ccrs.PlateCarree())
-    
+
         plt.title(title or f"Spatial Field Map: {var_name}")
         plt.show()
 
-    def compute_weighted_time_series(self, region_extent, groupby="time.dayofyear", lat_name="lat", lon_name="lon",
-                                 year=None, months=None, days=None):
+
+    def compute_weighted_time_series(self, region_extent, groupby="time.dayofyear", 
+                                    lat_name="lat", lon_name="lon", 
+                                    year=None, months=None, days=None, ds_in=None):
         """
         Compute a weighted spatial average time series over a specified region,
         with optional time filtering.
-    
+        
         The weights are based on the cosine of the latitude (in radians) to account for grid cell area.
-    
+        
         Args:
             region_extent (list or tuple): [lon_min, lon_max, lat_min, lat_max] defining the region.
             groupby (str, optional): Grouping for deseasonalization. Default is "time.dayofyear".
             lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
             lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
-            year (int, optional): Filter for a specific year.
-            months (int or list of ints, optional): Filter for specific month(s).
-            days (int or list of ints, optional): Filter for specific day(s).
-    
+            year (int, optional): A specific year to filter on.
+            months (int or list of ints, optional): Month(s) to filter on.
+            days (int or list of ints, optional): Day(s) of the month to filter on.
+            ds_in (xarray.Dataset, optional): A dataset to use for computing the time series.
+        
         Returns:
             dict: Dictionary with keys "raw", "deseasonalized", and "detrended" containing the time series.
         """
-        # Apply time filtering using your subset_data method
-        ds_time = self.subset_data(year=year, months=months, days=days)
-    
-        # Now apply spatial subsetting on the time-filtered dataset:
+        # Use ds_in if provided; otherwise, use self.ds filtered by time.
+        ds_time = self.subset_data(ds_in=ds_in, year=year, months=months, days=days)
+
+        # Spatial subsetting:
         lon_min, lon_max, lat_min, lat_max = region_extent
         ds_region = ds_time.where(
             (ds_time[lon_name] >= lon_min) & (ds_time[lon_name] <= lon_max) &
             (ds_time[lat_name] >= lat_min) & (ds_time[lat_name] <= lat_max),
             drop=True
         )
-    
+
         # Compute weights based on latitude (in radians)
         weights = np.cos(np.deg2rad(ds_region[lat_name]))
         weights, _ = xr.broadcast(weights, ds_region[self.var_name])
-    
-        # Raw weighted time series
+
+        # Raw weighted time series:
         raw_ts = (ds_region[self.var_name] * weights).sum(dim=[lat_name, lon_name]) / weights.sum(dim=[lat_name, lon_name])
-    
-        # Deseasonalized
-        ds_deseason = self.deseasonalize(ds_region, var_name=self.var_name, groupby=groupby)
+
+        # Deseasonalized dataset:
+        ds_deseason = self.deseasonalize(ds_in=ds_region, var_name=self.var_name, groupby=groupby)
         deseason_ts = (ds_deseason[self.var_name] * weights).sum(dim=[lat_name, lon_name]) / weights.sum(dim=[lat_name, lon_name])
-    
-        # Detrended (applied to the deseasonalized data)
-        ds_detrend = self.detrend_linear(ds_deseason, var_name=self.var_name)
+
+        # Detrended dataset:
+        ds_detrend = self.detrend_linear(ds_in=ds_deseason, var_name=self.var_name)
         detrend_ts = (ds_detrend[self.var_name] * weights).sum(dim=[lat_name, lon_name]) / weights.sum(dim=[lat_name, lon_name])
-    
+
         return {"raw": raw_ts, "deseasonalized": deseason_ts, "detrended": detrend_ts}
 
 
-    def plot_weighted_time_series(self, region_extent, groupby="time.dayofyear", lat_name="lat", lon_name="lon"):
+    def plot_weighted_time_series(self, region_extent, groupby="time.dayofyear", 
+                                lat_name="lat", lon_name="lon", 
+                                year=None, months=None, days=None, ds_in=None):
         """
-        Plot the weighted spatially averaged time series over a specific region.
+        Plot the weighted spatially averaged time series over a specific region,
+        with optional time filtering.
         
         This plots the raw, deseasonalized, and detrended time series on one figure.
         
@@ -274,8 +301,13 @@ class PreProcessNC:
             groupby (str, optional): Grouping for deseasonalization. Default is "time.dayofyear".
             lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
             lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
+            year (int, optional): A specific year to filter on.
+            months (int or list of ints, optional): Month(s) to filter on.
+            days (int or list of ints, optional): Day(s) of the month to filter on.
+            ds_in (xarray.Dataset, optional): A dataset to use for computing the time series.
         """
-        ts_dict = self.compute_weighted_time_series(region_extent, groupby, lat_name, lon_name)
+        ts_dict = self.compute_weighted_time_series(region_extent, groupby, lat_name, lon_name,
+                                                    year=year, months=months, days=days, ds_in=ds_in)
         
         plt.figure(figsize=(12, 6))
         ts_dict["raw"].plot(label="Raw", color="blue")
