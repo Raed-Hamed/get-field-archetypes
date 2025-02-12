@@ -29,10 +29,10 @@ nc_deseason_detrend = nc_in.detrend_linear(ds_in=nc_deseason)
 ## Plot
 ```{python}
 nc_in.plot_spatial_field(ds_in = nc_deseason_detrend, region_extent = [-10, 40, 35, 70],
-title="2003-EU-JJA",
+title="",
 year = 2018,
-months = [6,7,8],
-aggregate = "mean")
+months = [7,8],
+aggregate = "none")
 ```
 
 ```{python}

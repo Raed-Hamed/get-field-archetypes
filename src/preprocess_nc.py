@@ -179,11 +179,14 @@ class PreProcessNC:
         """
         Plot a spatial field map, optionally restricted to a specific region and time filters.
         
+        When aggregate is "none", a separate panel is created for each time step with a single,
+        shared colorbar and a global title that includes the region extent, year, variable name, and month(s).
+        
         Args:
             region_extent (list or tuple, optional): [lon_min, lon_max, lat_min, lat_max] defining the region.
                 If None, the full dataset is used.
             var_name (str, optional): Variable to plot. Defaults to the instance variable.
-            title (str, optional): Title for the plot.
+            title (str, optional): Overall title for the plot. If not provided, a default title is generated.
             aggregate (str, optional): How to aggregate over time ('mean', 'sum', or 'none').
             lat_name (str, optional): Name of the latitude coordinate. Default is "lat".
             lon_name (str, optional): Name of the longitude coordinate. Default is "lon".
@@ -195,20 +198,25 @@ class PreProcessNC:
         Returns:
             None. Displays the plot.
         """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+
         if var_name is None:
             var_name = self.var_name
 
-        # Use ds_in if provided; otherwise, use self.ds (non-destructively) via subset_data.
+        # Filter the dataset by time using the subset_data method.
         ds_time_filtered = self.subset_data(ds_in=ds_in, year=year, months=months, days=days)
 
-        # Optionally remap longitudes if they are in 0-360:
+        # Remap longitudes if needed (from 0-360 to -180-180)
         ds_to_plot = ds_time_filtered
         if ds_to_plot[lon_name].max() > 180:
             ds_to_plot = ds_to_plot.assign_coords(
                 lon=(((ds_to_plot[lon_name] + 180) % 360) - 180)
             ).sortby(lon_name)
 
-        # If a spatial region is provided, subset the dataset accordingly:
+        # Subset by region if provided.
         if region_extent is not None:
             ds_to_plot = ds_to_plot.where(
                 (ds_to_plot[lon_name] >= region_extent[0]) &
@@ -217,37 +225,102 @@ class PreProcessNC:
                 (ds_to_plot[lat_name] <= region_extent[3]),
                 drop=True
             )
+        
+        # Build a global title that includes the key information.
+        default_title = (f"Spatial Field Map: {var_name} | Region: "
+                        f"{region_extent if region_extent is not None else 'Full Domain'} | "
+                        f"Year: {year} | Month(s): {months}")
+        global_title = title or default_title
 
-        # Aggregate over time if requested:
-        if aggregate == "mean":
-            field = ds_to_plot[var_name].mean(dim="time")
-        elif aggregate == "sum":
-            field = ds_to_plot[var_name].sum(dim="time")
+        if aggregate in ["mean", "sum"]:
+            # For aggregated cases, compute the aggregation and make a single-panel plot.
+            if aggregate == "mean":
+                field = ds_to_plot[var_name].mean(dim="time")
+            else:
+                field = ds_to_plot[var_name].sum(dim="time")
+
+            fig, ax = plt.subplots(1, 1, figsize=(8, 5),
+                                subplot_kw=dict(projection=ccrs.PlateCarree()))
+            field.plot(
+                ax=ax,
+                transform=ccrs.PlateCarree(),
+                cmap="RdBu_r",
+                robust=True,
+                cbar_kwargs={'label': var_name}
+            )
+            ax.coastlines()
+            ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+            ax.add_feature(cfeature.LAND, facecolor="lightgray")
+            if region_extent is not None:
+                ax.set_extent(region_extent, crs=ccrs.PlateCarree())
+            ax.set_title(global_title)
+            plt.show()
+
         elif aggregate == "none":
+            # For "none", plot each time slice individually with a shared colorbar.
             field = ds_to_plot[var_name]
+            if "time" in field.dims:
+                num_panels = field.sizes["time"]
+                # Compute global color limits so all panels share the same scale.
+                vmin = float(field.min().values)
+                vmax = float(field.max().values)
+
+                # Create subplots in a single row (adjust figsize as needed).
+                fig, axes = plt.subplots(1, num_panels, figsize=(8 * num_panels, 5),
+                                        subplot_kw=dict(projection=ccrs.PlateCarree()))
+                # Ensure axes is always iterable.
+                if num_panels == 1:
+                    axes = [axes]
+                im = None  # To store the mappable from the first plot.
+                for i, ax in enumerate(axes):
+                    sub_field = field.isel(time=i)
+                    # Format the date string for the subplot title.
+                    date_str = np.datetime_as_string(sub_field["time"].values, unit='D')
+                    im = sub_field.plot(
+                        ax=ax,
+                        transform=ccrs.PlateCarree(),
+                        cmap="RdBu_r",
+                        robust=True,
+                        add_colorbar=False,  # Turn off individual colorbars.
+                        vmin=vmin,
+                        vmax=vmax
+                    )
+                    ax.coastlines()
+                    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+                    ax.add_feature(cfeature.LAND, facecolor="lightgray")
+                    if region_extent is not None:
+                        ax.set_extent(region_extent, crs=ccrs.PlateCarree())
+                    ax.set_title(date_str)
+                # Adjust the layout to leave space for the vertical colorbar and the global title.
+                fig.subplots_adjust(right=0.85, top=0.85)
+                # Create a single vertical colorbar.
+                cbar = fig.colorbar(im, ax=axes, orientation='vertical', fraction=0.05, pad=0.04)
+                cbar.set_label(var_name)
+                plt.suptitle(global_title, fontsize=16)
+                plt.show()
+            else:
+                # If there's no time dimension, revert to a single-panel plot.
+                fig, ax = plt.subplots(1, 1, figsize=(8, 5),
+                                    subplot_kw=dict(projection=ccrs.PlateCarree()))
+                field.plot(
+                    ax=ax,
+                    transform=ccrs.PlateCarree(),
+                    cmap="RdBu_r",
+                    robust=True,
+                    cbar_kwargs={'label': var_name}
+                )
+                ax.coastlines()
+                ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+                ax.add_feature(cfeature.LAND, facecolor="lightgray")
+                if region_extent is not None:
+                    ax.set_extent(region_extent, crs=ccrs.PlateCarree())
+                ax.set_title(global_title)
+                plt.show()
         else:
             raise ValueError("Aggregate must be 'mean', 'sum', or 'none'.")
 
-        fig, ax = plt.subplots(
-            figsize=(8, 5), subplot_kw=dict(projection=ccrs.PlateCarree())
-        )
-        field.plot(
-            ax=ax,
-            transform=ccrs.PlateCarree(),
-            cmap="RdBu_r",
-            robust=True,
-            cbar_kwargs={'label': title or f"{var_name} ({aggregate})"}
-        )
-        ax.coastlines()
-        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
-        ax.add_feature(cfeature.LAND, facecolor="lightgray")
 
-        # Only set the extent if a region_extent is provided
-        if region_extent is not None:
-            ax.set_extent(region_extent, crs=ccrs.PlateCarree())
 
-        plt.title(title or f"Spatial Field Map: {var_name}")
-        plt.show()
 
 
     def compute_weighted_time_series(self, region_extent, groupby="time.dayofyear", 
